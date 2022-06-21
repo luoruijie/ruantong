@@ -1,0 +1,130 @@
+import networkx
+import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
+import re
+import jieba
+
+class ExtractableAutomaticSummary:
+    def __init__(self,article):
+        """
+        抽取式自动摘要
+        :param article: 文章内容，列表，列表元素为字符串，包含了文章内容，形如['完整文章']
+        :param num_sentences: 生成摘要的句子数
+        """
+        self.article = article
+        self.stopwords = None
+        self.word_embeddings = {}
+        self.sentences_vectors = []
+        self.ranked_sentences = None
+        self.similarity_matrix = None
+        # 封装时踩过的坑：
+        # 这里self.similarity_matrix不能初始化为np.zeros((len(self.sentences_vectors), len(self.sentences_vectors)))，
+        # 因为__init__函数会在类实例化时运行，similarity_matrix维度会被赋予（0,0），后续程序会报错out of index,而不是想象中的
+        # sentences_vectors先有了维度，而后similarity_matrix有（237,237）(本例中，测试文章有237句)
+
+    def __get_sentences(self,sentences):
+        """
+        断句函数
+        :param sentences:字符串，完整文章，在本例中，即为article[0]
+        :return:列表，每个元素是一个字符串，字符串为一个句子
+        """
+        sentences = re.sub('([（），。！？\?])([^”’])', r"\1\n\2", sentences)  # 单字符断句符
+        sentences = re.sub('(\.{6})([^”’])', r"\1\n\2", sentences)  # 英文省略号
+        sentences = re.sub('(\…{2})([^”’])', r"\1\n\2", sentences)  # 中文省略号
+        sentences = re.sub('([。！？\?][”’])([^，。！？\?])', r'\1\n\2', sentences)
+        # 如果双引号前有终止符，那么双引号才是句子的终点，把分句符\n放到双引号后，注意前面的几句都小心保留了双引号
+        sentences =sentences.rstrip()  # 段尾如果有多余的\n就去掉它
+        # 很多规则中会考虑分号;，但是这里忽略不计，破折号、英文双引号等同样忽略，需要的再做些简单调整即可。
+        return sentences.split("\n")
+
+    def __get_stopwords(self):
+        # 加载停用词，下载地址见最上注释
+        self.stopwords = [line.strip() for line in open('cn_stopwords.txt',encoding='utf-8').readlines()]
+
+    def __remove_stopwords_from_sentence(self,sentence):
+    	# 去除停用词
+    	sentence = [i for i in sentence if i not in self.stopwords]
+    	# 英文版这里用的sentence = ' '.join([i for i in sentence if i not in self.stopwords])，
+    	# 在中文语境下，这么做会导致处理后的句子变成类似‘这么 做 会 导致 处理 后 的 句子’，
+    	# 而后在计算相似度时，对该字符串迭代循环，会变成一个字一个字的计算，失去了词汇本身的含义
+    	# 同时还包含了空格，当然在TextRank算法中影响不大，空格不在词向量表中，只会增加句子长度，最终结果会使所有句向量同时缩小
+    	# 插个眼：涉及到LSTM等算法时，空格会占据文本长度，造成信息丢失
+        # 实际上这么干效果未必差，有些文章仅通过字向量计算，效果还挺好的，有需求自己调试
+
+		# 新发现，因为计算句向量时，相比英文版代码，我少了个split方法，导致上述问题
+		# 不过还是决定保留下来这种写法，这样可以方便调试使用字向量还是词向量
+
+        return sentence
+
+    def __get_word_embeddings(self):
+    	# 获取词向量，不要第一行，第一行是该词向量表的统计信息
+        with open('sgns.sogou.char', encoding='utf-8') as f:
+            lines = f.readlines()
+            for _, line in enumerate(lines):
+                if _ != 0:
+                    values = line.split()
+                    word = values[0]
+                    coefs = np.asarray(values[1:], dtype='float32')
+                    self.word_embeddings[word] = coefs
+
+    def __get_sentence_vectors(self,cutted_clean_sentences):
+        # 获取句向量，将句子中的每个词向量相加，再取均值，所得即为句向量
+        for i in cutted_clean_sentences:
+            if len(i) != 0:
+                v = sum(
+                    [self.word_embeddings.get(w.strip(), np.zeros((300,))) for w in i]
+                ) / (len(i) + 1e-2)
+            else:
+                v = np.zeros((300,))
+                # 因为预训练的词向量维度是300
+            self.sentences_vectors.append(v)
+
+    def __get_simlarity_matrix(self):
+        # 计算相似度矩阵，基于余弦相似度
+        self.similarity_matrix = np.zeros((len(self.sentences_vectors), len(self.sentences_vectors)))
+        for i in range(len(self.sentences_vectors)):
+            for j in range(len(self.sentences_vectors)):
+                if i != j:
+                    self.similarity_matrix[i][j] = cosine_similarity(
+                        self.sentences_vectors[i].reshape(1, -1), self.sentences_vectors[j].reshape(1, -1)
+                    )
+                    # 这里reshape不可少，不信你查sklearn手册
+
+    def calculate(self):
+        self.__get_word_embeddings()
+        # 获取词向量
+        self.__get_stopwords()
+        # 获取停用词
+        sentences = self.__get_sentences(self.article[0])
+        # 将文章分割为句子
+        cutted_sentences = [jieba.lcut(s) for s in sentences]
+        # 对每个句子分词
+        cutted_clean_sentences = [self.__remove_stopwords_from_sentence(sentence) for sentence in cutted_sentences]
+        # 句子分词后去停用词
+        # 先分词，再去停用词，直接去停用词会把每个字分开，比如变成‘直 接 去 停 用 词 会 把 每 个 字 分 开’
+        self.__get_sentence_vectors(cutted_clean_sentences)
+        # 获取句向量
+        self.__get_simlarity_matrix()
+        # 获取相似度矩阵
+        nx_graph = networkx.from_numpy_array(self.similarity_matrix)
+        scores = networkx.pagerank(nx_graph)
+        # 将相似度矩阵转为图结构
+        self.ranked_sentences = sorted(
+            ((scores[i], s) for i, s in enumerate(sentences)), reverse=True
+        )
+        # 排序
+
+    def get_abstract(self,num_abstract_sentences):
+        # 这里的主函数将计算过程和获取得分前几的句子的函数分开，ranked_sentences写入类属性中，
+        # 就可以重复调用get_abstract方法而避免多次计算了，方便测试
+        for i in range(num_abstract_sentences):
+            print(self.ranked_sentences[i][1])
+
+
+with open('测试文章.txt',encoding='utf-8') as f:
+	# 自己随手复制粘贴个文章进去即可
+    article = f.readlines()
+
+demo = ExtractableAutomaticSummary(article)
+demo.calculate()
+demo.get_abstract(4)
