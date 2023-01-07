@@ -1,4 +1,8 @@
-#在一个flask路由下多线程并发调用接口
+“”“在一个flask路由下多线程并发调用接口，来源自
+利用Python快速实现一个线程池，非常简单 - 秀儿的文章 - 知乎
+https://zhuanlan.zhihu.com/p/549429978
+”“”
+
 import flask 
 from concurrent.futures import ThreadPoolExecutor,all_completed
 import time
