@@ -1,0 +1,21 @@
+#在一个flask路由下多线程并发调用接口
+import flask 
+from concurrent.futures import ThreadPoolExecutor,all_completed
+import time
+
+def task(name, n):
+    time.sleep(n)
+    return f"{name} 睡了 {n} 秒"
+
+executor = ThreadPoolExecutor()
+future1 = executor.submit(task, 5)
+future2 = executor.submit(task, 2)
+future3 = executor.submit(task, 4)
+
+fs = wait([future1, future2, future3],
+          return_when="ALL_COMPLETED")
+          
+output1 = future1.result()
+output2 = future2.result()
+output3 = future3.result() 
+
