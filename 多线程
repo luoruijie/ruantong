@@ -16,6 +16,7 @@ future1 = executor.submit(task, 5)
 future2 = executor.submit(task, 2)
 future3 = executor.submit(task, 4)
 
+#等待所有的的函数执行完毕。
 fs = wait([future1, future2, future3],
           return_when="ALL_COMPLETED")
           
